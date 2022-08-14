@@ -1,0 +1,14 @@
+rules:
+  - test: '.*ts'
+    watch_dir: C:\Users\zanllp\Downloads\Video
+    emit: move_to_saved_dir
+  - test: '.*'
+    watch_dir: 'F:\BaiduNetdiskDownload'
+    priority: -1
+    emit: try_unpack
+tasks:
+  try_unpack: !TryUnpack
+    pwd: 111111
+  move_to_saved_dir: !Move
+    target: 'E:\_归档\!3'
+debounce_time: 300
