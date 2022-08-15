@@ -2,12 +2,12 @@ use futures::{
     channel::mpsc::{channel, Receiver},
     SinkExt, StreamExt,
 };
-use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher, EventKind};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use regex;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap as Map;
 use std::fs;
 use std::path::Path;
-use regex;
+use std::{collections::BTreeMap as Map, path::PathBuf};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct RunConfig {
@@ -20,8 +20,9 @@ struct RunConfig {
 struct Rule {
     pub test: String,
     pub watch_dir: String,
-    pub emit: String,
+    pub emit: Option<String>,
     pub priority: Option<i32>,
+    pub execute: Option<TaskConf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -54,7 +55,11 @@ async fn main() {
     let mut tasks = Vec::new();
     config.rules.iter().for_each(|rule| {
         regex::Regex::new(&rule.test).unwrap(); //  pre check
-        tasks.push(async_watch_target(&rule.watch_dir, rule.clone(), config.clone()));
+        tasks.push(async_watch_target(
+            &rule.watch_dir,
+            rule.clone(),
+            config.clone(),
+        ));
     });
     futures::future::join_all(tasks).await;
 }
@@ -73,12 +78,16 @@ fn async_watcher() -> notify::Result<(RecommendedWatcher, Receiver<notify::Resul
     Ok((watcher, rx))
 }
 
-async fn async_watch_target<P: AsRef<Path>>(path: P, rule: Rule, config: RunConfig) -> notify::Result<()> {
+async fn async_watch_target<P: AsRef<Path>>(
+    path: P,
+    rule: Rule,
+    config: RunConfig,
+) -> notify::Result<()> {
     let (mut watcher, mut rx) = async_watcher()?;
 
     // Add a path to be watched. All files and directories at that path and
     // below will be monitored for changes.
-    watcher.watch(path.as_ref(), RecursiveMode::Recursive)?;
+    watcher.watch(path.as_ref(), RecursiveMode::NonRecursive)?;
 
     while let Some(res) = rx.next().await {
         match res {
@@ -95,31 +104,43 @@ async fn async_watch_target<P: AsRef<Path>>(path: P, rule: Rule, config: RunConf
                     if !matched {
                         continue;
                     }
-                    let task = config.tasks.get(&rule.emit).unwrap();
-                    match task {
-                        TaskConf::Copy(conf) => {
-                            let target = Path::new(&conf.target).join(file_name);
-                            fs::copy(path, target).unwrap();
-                        }
-                        TaskConf::Move(conf) => {
-                            let target = Path::new(&conf.target).join(file_name);
-                            fs::rename(path, target).unwrap();
-                        }
-                        TaskConf::TryUnpack(conf) => {
-                            let pwd = Path::new(&conf.pwd);
-                            let target = pwd.join(file_name);
-                            if target.is_dir() {
-                                continue;
-                            }
-                            let mut archive = zip::ZipArchive::new(fs::File::open(path).unwrap());
-                        }
+                    if let Some(emit) = rule.emit.to_owned() {
+                        let task = config.tasks.get(&emit).unwrap();
+                        execute_task(task, file_name, path);
+                    }
+                    if let Some(execute) = rule.execute.to_owned() {
+                        execute_task(&execute, file_name, path);
                     }
                 }
-                _ => println!("other {:?}", event)
+                _ => println!("other {:?}", event),
             },
             Err(e) => println!("watch error: {:?}", e),
         }
     }
 
     Ok(())
+}
+
+fn execute_task(task: &TaskConf, file_name: &str, path: &PathBuf) {
+    match task {
+        TaskConf::Copy(conf) => {
+            let target = Path::new(&conf.target).join(file_name);
+            println!("copy {} to {}", path.display(), target.display());
+            fs::copy(path, target).unwrap();
+        }
+        TaskConf::Move(conf) => {
+            let target = Path::new(&conf.target).join(file_name);
+            // 移动文件到目标目录
+            println!("move {:?} to {:?}", path.display(), target.display());
+            fs::rename(path, target).unwrap();
+        }
+        TaskConf::TryUnpack(conf) => {
+            let pwd = Path::new(&conf.pwd);
+            let target = pwd.join(file_name);
+            if target.is_dir() {
+                return;
+            }
+            let mut _archive = zip::ZipArchive::new(fs::File::open(path).unwrap());
+        }
+    }
 }

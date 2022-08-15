@@ -6,6 +6,10 @@ rules:
     watch_dir: 'F:\BaiduNetdiskDownload'
     priority: -1
     emit: try_unpack
+  - test: '\d+_p0_master1200.jpg'
+    watch_dir: C:\Users\zanllp\Desktop
+    execute: !Copy
+      target: E:\_归档\pixiv_img
 tasks:
   try_unpack: !TryUnpack
     pwd: 111111
