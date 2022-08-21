@@ -5,9 +5,10 @@ use futures::{
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use regex;
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::Path;
 use std::{collections::BTreeMap as Map, path::PathBuf};
+use std::{fs, time::Duration};
+use tokio::{task::JoinHandle, time::sleep};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct RunConfig {
@@ -87,30 +88,49 @@ async fn async_watch_target<P: AsRef<Path>>(
 
     // Add a path to be watched. All files and directories at that path and
     // below will be monitored for changes.
-    watcher.watch(path.as_ref(), RecursiveMode::NonRecursive)?;
-
+    watcher.watch(path.as_ref(), RecursiveMode::NonRecursive)?; //
+    let mut map: Map<String, JoinHandle<()>> = Map::new();
     while let Some(res) = rx.next().await {
+        println!("{:?}", res);
         match res {
             Ok(event) => match event {
                 Event {
-                    kind: EventKind::Create(..),
+                    kind: EventKind::Create(..) | EventKind::Modify(..),
                     paths,
                     ..
                 } => {
                     let path = &paths[0];
-                    let file_name = path.as_path().file_name().unwrap().to_str().unwrap();
+                    let path_str = path.to_str().unwrap().to_string();
+                    let file_name = path
+                        .as_path()
+                        .file_name()
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .to_string();
                     let regex = regex::Regex::new(&rule.test).unwrap();
-                    let matched = regex.is_match(file_name);
+                    let matched = regex.is_match(&file_name);
                     if !matched {
                         continue;
                     }
-                    if let Some(emit) = rule.emit.to_owned() {
-                        let task = config.tasks.get(&emit).unwrap();
-                        execute_task(task, file_name, path);
+                    if let Some(handler) = map.get(&path_str) {
+                        handler.abort()
                     }
-                    if let Some(execute) = rule.execute.to_owned() {
-                        execute_task(&execute, file_name, path);
+                    let sleep_time = Duration::from_secs(config.debounce_time.into());
+                    let mut task = rule.execute.clone();
+                    if task.is_none() {
+                        if let Some(emit) = rule.emit.to_owned() {
+                            task = Some(config.tasks.get(&emit).unwrap().clone());
+                        }
                     }
+                    let path = path.clone();
+                    let hanler = tokio::spawn(async move {
+                        println!("dispatching task: {:?}", task);
+                        sleep(sleep_time).await;
+                        println!("execute task: {:?}", task);
+                        execute_task(task.unwrap(), file_name, path);
+                    });
+                    map.insert(path_str, hanler);
                 }
                 _ => println!("other {:?}", event),
             },
@@ -121,12 +141,12 @@ async fn async_watch_target<P: AsRef<Path>>(
     Ok(())
 }
 
-fn execute_task(task: &TaskConf, file_name: &str, path: &PathBuf) {
+fn execute_task(task: TaskConf, file_name: String, path: PathBuf) {
     match task {
         TaskConf::Copy(conf) => {
             let target = Path::new(&conf.target).join(file_name);
             println!("copy {} to {}", path.display(), target.display());
-            fs::copy(path, target).unwrap();
+            fs::copy(path, target);
         }
         TaskConf::Move(conf) => {
             let target = Path::new(&conf.target).join(file_name);
