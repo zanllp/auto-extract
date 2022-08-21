@@ -91,7 +91,6 @@ async fn async_watch_target<P: AsRef<Path>>(
     watcher.watch(path.as_ref(), RecursiveMode::NonRecursive)?; //
     let mut map: Map<String, JoinHandle<()>> = Map::new();
     while let Some(res) = rx.next().await {
-        println!("{:?}", res);
         match res {
             Ok(event) => match event {
                 Event {
@@ -146,13 +145,21 @@ fn execute_task(task: TaskConf, file_name: String, path: PathBuf) {
         TaskConf::Copy(conf) => {
             let target = Path::new(&conf.target).join(file_name);
             println!("copy {} to {}", path.display(), target.display());
-            fs::copy(path, target);
+            fs::copy(path, target).unwrap();
         }
         TaskConf::Move(conf) => {
             let target = Path::new(&conf.target).join(file_name);
             // 移动文件到目标目录
             println!("move {:?} to {:?}", path.display(), target.display());
-            fs::rename(path, target).unwrap();
+            match fs::rename(path.clone(), target.clone()) {
+                Ok(_) => println!("move success"),
+                Err(e) => {
+                    println!("move failed: {:?}; use fallback method", e);
+                    fs::copy(path.clone(), target).unwrap();
+                    fs::remove_file(path).unwrap();
+                    println!("move success")
+                },
+            }
         }
         TaskConf::TryUnpack(conf) => {
             let pwd = Path::new(&conf.pwd);
