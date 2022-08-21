@@ -58,8 +58,8 @@ async fn main() {
         regex::Regex::new(&rule.test).unwrap(); //  pre check
         tasks.push(async_watch_target(
             &rule.watch_dir,
-            rule.clone(),
-            config.clone(),
+            &rule,
+            &config,
         ));
     });
     futures::future::join_all(tasks).await;
@@ -81,8 +81,8 @@ fn async_watcher() -> notify::Result<(RecommendedWatcher, Receiver<notify::Resul
 
 async fn async_watch_target<P: AsRef<Path>>(
     path: P,
-    rule: Rule,
-    config: RunConfig,
+    rule: &Rule,
+    config: &RunConfig,
 ) -> notify::Result<()> {
     let (mut watcher, mut rx) = async_watcher()?;
 
@@ -131,7 +131,7 @@ async fn async_watch_target<P: AsRef<Path>>(
                     });
                     map.insert(path_str, hanler);
                 }
-                _ => println!("other {:?}", event),
+                _ => (),
             },
             Err(e) => println!("watch error: {:?}", e),
         }
@@ -151,11 +151,11 @@ fn execute_task(task: TaskConf, file_name: String, path: PathBuf) {
             let target = Path::new(&conf.target).join(file_name);
             // 移动文件到目标目录
             println!("move {:?} to {:?}", path.display(), target.display());
-            match fs::rename(path.clone(), target.clone()) {
+            match fs::rename(&path, &target) {
                 Ok(_) => println!("move success"),
                 Err(e) => {
                     println!("move failed: {:?}; use fallback method", e);
-                    fs::copy(path.clone(), target).unwrap();
+                    fs::copy(&path, target).unwrap();
                     fs::remove_file(path).unwrap();
                     println!("move success")
                 },
